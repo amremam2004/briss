@@ -28,13 +28,13 @@ import javax.swing.JScrollPane;
 import javax.swing.SwingWorker;
 import javax.swing.filechooser.FileFilter;
 
-import com.itextpdf.text.DocumentException;
-import com.itextpdf.text.pdf.PdfArray;
-import com.itextpdf.text.pdf.PdfDictionary;
-import com.itextpdf.text.pdf.PdfName;
-import com.itextpdf.text.pdf.PdfNumber;
-import com.itextpdf.text.pdf.PdfReader;
-import com.itextpdf.text.pdf.PdfStamper;
+import com.lowagie.text.DocumentException;
+import com.lowagie.text.pdf.PdfArray;
+import com.lowagie.text.pdf.PdfDictionary;
+import com.lowagie.text.pdf.PdfName;
+import com.lowagie.text.pdf.PdfNumber;
+import com.lowagie.text.pdf.PdfReader;
+import com.lowagie.text.pdf.PdfStamper;
 
 import multivalent.Behavior;
 import multivalent.Context;
@@ -44,7 +44,6 @@ import multivalent.ParseException;
 import multivalent.std.adaptor.pdf.PDF;
 
 /**
- * even = 0, odd =1
  * 
  * @author gerhard
  * 
@@ -65,6 +64,7 @@ public class Briss extends JFrame implements ActionListener,
 	private ClusterPagesTask clusterTask;
 	private CropPDFTask cropTask;
 	private File origFile = null;
+	private File croppedFile = null;
 
 	private final static int MAX_DOC_X = 30;
 	private final static int MAX_DOC_Y = 30;
@@ -74,8 +74,13 @@ public class Briss extends JFrame implements ActionListener,
 		init();
 	}
 
-	private File loadPDF() {
+	private File loadPDF(String recommendation) {
+
 		JFileChooser fc = new JFileChooser();
+		if (recommendation != null) {
+			File recommendedFile = new File(recommendation);
+			fc.setSelectedFile(recommendedFile);
+		}
 		fc.setFileFilter(new FileFilter() {
 			@Override
 			public boolean accept(File pathname) {
@@ -146,31 +151,42 @@ public class Briss extends JFrame implements ActionListener,
 	@Override
 	public void actionPerformed(ActionEvent aE) {
 		if (aE.getActionCommand().equals(LOAD)) {
-			origFile = loadPDF();
+			origFile = loadPDF(null);
 			if (origFile != null) {
 				actionBtn.setEnabled(false);
 				progressBar.setString("loading PDF");
 				setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
-				clusterTask = new ClusterPagesTask(origFile);
+				clusterTask = new ClusterPagesTask();
 				clusterTask.addPropertyChangeListener(this);
 				clusterTask.execute();
 			}
 		} else if (aE.getActionCommand().equals(CROP)) {
+			// create file recommendation
+			String origName = origFile.getAbsolutePath();
+			String recommendedName = origName.substring(0,
+					origName.length() - 4)
+					+ "_cropped.pdf";
+			croppedFile = loadPDF(recommendedName);
+			if (!croppedFile.exists()) {
+				try {
+					croppedFile.createNewFile();
+				} catch (IOException e) {
+					// TODO show dialog
+				}
+			}
 			actionBtn.setEnabled(false);
 			progressBar.setString("loading PDF");
 			setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
-			cropTask = new CropPDFTask(origFile);
+			cropTask = new CropPDFTask();
 			cropTask.addPropertyChangeListener(this);
 			cropTask.execute();
 		}
 	}
 
 	private class CropPDFTask extends SwingWorker<Void, Void> {
-		private File pdfFile;
 
-		public CropPDFTask(File pdfFile) {
+		public CropPDFTask() {
 			super();
-			this.pdfFile = pdfFile;
 		}
 
 		@Override
@@ -180,67 +196,39 @@ public class Briss extends JFrame implements ActionListener,
 			progressBar.setValue(0);
 			progressBar.setString("");
 			setCursor(Cursor.getPredefinedCursor(Cursor.DEFAULT_CURSOR));
+			System.exit(0);
 		}
 
 		@Override
-		protected Void doInBackground() throws Exception {
+		protected Void doInBackground() {
 
 			PdfReader reader;
 			try {
-				reader = new PdfReader(pdfFile.getAbsolutePath());
+				reader = new PdfReader(origFile.getAbsolutePath());
 
 				PdfStamper stamper = new PdfStamper(reader,
-						new FileOutputStream("out.pdf"));
+						new FileOutputStream(croppedFile));
 
 				int pageCount = reader.getNumberOfPages();
 				PdfDictionary pageDict;
-				PdfArray old_mediabox, new_mediabox, old_cropbox, new_cropbox;
-				PdfNumber value;
-				PdfNumber x1, y1, x2, y2;
 				for (int pageNumber = 1; pageNumber <= pageCount; pageNumber++) {
 					PDFPageClusterInfo clusterInfo = clustersMapping[pageNumber - 1];
-					// /(x1, y1, x2, y2) left bottom, right top
 
 					pageDict = reader.getPageN(pageNumber);
-					new_mediabox = new PdfArray();
-					old_mediabox = pageDict.getAsArray(PdfName.MEDIABOX);
-					x1 = (PdfNumber) old_mediabox.getAsNumber(0);
-					y1 = (PdfNumber) old_mediabox.getAsNumber(1);
-					x2 = (PdfNumber) old_mediabox.getAsNumber(2);
-					y2 = (PdfNumber) old_mediabox.getAsNumber(3);
-					int mediaWidth = x2.intValue() - x1.intValue();
-					int mediaHeight = y2.intValue() - y1.intValue();
 
-					if (clusterInfo.getRatios() != null) {
-						int x1n = (int) (x1.intValue() + (mediaWidth * clusterInfo
-								.getRatios()[0]));
-						int y1n = (int) (y1.intValue() + (mediaHeight * clusterInfo
-								.getRatios()[2]));
-						int x2n = (int) (x1.intValue() + (mediaWidth * clusterInfo
-								.getRatios()[1]));
-						int y2n = (int) (y1.intValue() + (mediaHeight * clusterInfo
-								.getRatios()[3]));
-						new_mediabox.add(new PdfNumber(x1n));
-						new_mediabox.add(new PdfNumber(y1n));
-						new_mediabox.add(new PdfNumber(x2n));
-						new_mediabox.add(new PdfNumber(y2n));
-						pageDict.put(PdfName.MEDIABOX, new_mediabox);
+					List<PdfArray> boxList = new ArrayList<PdfArray>();
+					boxList.add(pageDict.getAsArray(PdfName.MEDIABOX));
+					boxList.add(pageDict.getAsArray(PdfName.CROPBOX));
+					boxList.add(pageDict.getAsArray(PdfName.TRIMBOX));
+					boxList.add(pageDict.getAsArray(PdfName.BLEEDBOX));
 
-					}
+					PdfArray scaledBox = calculateScaledBox(boxList,
+							clusterInfo.getRatios());
 
-					new_cropbox = new PdfArray();
-					old_cropbox = pageDict.getAsArray(PdfName.CROPBOX);
-					if (old_cropbox != null) {
-						value = (PdfNumber) old_cropbox.getAsNumber(0);
-						new_cropbox.add(new PdfNumber(value.floatValue() + 50));
-						value = (PdfNumber) old_cropbox.getAsNumber(1);
-						new_cropbox.add(new PdfNumber(value.floatValue() + 50));
-						value = (PdfNumber) old_cropbox.getAsNumber(2);
-						new_cropbox.add(new PdfNumber(value.floatValue() - 50));
-						value = (PdfNumber) old_cropbox.getAsNumber(3);
-						new_cropbox.add(new PdfNumber(value.floatValue() - 50));
-						pageDict.put(PdfName.CROPBOX, new_cropbox);
-					}
+					pageDict.put(PdfName.CROPBOX, scaledBox);
+					pageDict.put(PdfName.MEDIABOX, scaledBox);
+					pageDict.put(PdfName.TRIMBOX, scaledBox);
+					pageDict.put(PdfName.BLEEDBOX, scaledBox);
 
 					int percent = (int) ((pageNumber / (float) clustersMapping.length) * 100);
 					setProgress(percent);
@@ -257,21 +245,74 @@ public class Briss extends JFrame implements ActionListener,
 		}
 	}
 
+	// TODO change ratios to pdf format
+	/** ratios = x1,x2, y1,y2
+	 * 	 pdf orientation (x1, y1, x2, y2) left bottom, right top
+	 * @param boxes
+	 * @param ratios
+	 * @return
+	 */
+	private PdfArray calculateScaledBox(List<PdfArray> boxes, float[] ratios) {
+		if (ratios == null || boxes.size() == 0) {
+			return null;
+		}
+		// find smallest box
+		int smallestIndex = -1;
+		float smallestSquare = Float.MAX_VALUE;
+		for (PdfArray box : boxes) {
+			if (box != null) {
+				PdfNumber x1 = (PdfNumber) box.getAsNumber(0);
+				PdfNumber y1 = (PdfNumber) box.getAsNumber(1);
+				PdfNumber x2 = (PdfNumber) box.getAsNumber(2);
+				PdfNumber y2 = (PdfNumber) box.getAsNumber(3);
+				int boxWidth = x2.intValue() - x1.intValue();
+				int boxHeight = y2.intValue() - y1.intValue();
+				if (smallestSquare > boxWidth * boxHeight) {
+					// set new smallest box
+					smallestSquare = boxWidth * boxHeight;
+					smallestIndex = boxes.indexOf(box);
+				}
+			}
+		}
+		if (smallestIndex == -1) {
+			return null; // now useable box was found
+		}
+
+		// use smallest box as basis for calculation
+		PdfNumber x1 = (PdfNumber) boxes.get(smallestIndex).getAsNumber(0);
+		PdfNumber y1 = (PdfNumber) boxes.get(smallestIndex).getAsNumber(1);
+		PdfNumber x2 = (PdfNumber) boxes.get(smallestIndex).getAsNumber(2);
+		PdfNumber y2 = (PdfNumber) boxes.get(smallestIndex).getAsNumber(3);
+		int boxWidth = x2.intValue() - x1.intValue();
+		int boxHeight = y2.intValue() - y1.intValue();
+
+		// create a new pdfbox to return
+		int x1Scaled = (int) (x1.intValue() + (boxWidth * ratios[0]));
+		int y1Scaled = (int) (y1.intValue() + (boxHeight * (1 - ratios[3])));
+		int x2Scaled = (int) (x1.intValue() + (boxWidth * ratios[1]));
+		int y2Scaled = (int) (y1.intValue() + (boxHeight * (1 - ratios[2])));
+		
+		PdfArray scaledBox = new PdfArray();
+		scaledBox.add(new PdfNumber(x1Scaled));
+		scaledBox.add(new PdfNumber(y1Scaled));
+		scaledBox.add(new PdfNumber(x2Scaled));
+		scaledBox.add(new PdfNumber(y2Scaled));
+		
+		return scaledBox;
+	}
+
 	private class ClusterPagesTask extends
 			SwingWorker<PDFPageClusterInfo[], Void> {
 
-		private File pdfFile;
-
 		private int pageCount;
 
-		public ClusterPagesTask(File pdfFile) {
+		public ClusterPagesTask() {
 			super();
-			this.pdfFile = pdfFile;
 			PDF pdf = (PDF) Behavior.getInstance("AdobePDF", "AdobePDF", null,
 					null, null);
 			progressBar.setString("Analysing PDF pages");
 			try {
-				pdf.setInput(pdfFile);
+				pdf.setInput(origFile);
 				Document doc = new Document("doc", null, null);
 				pdf.parse(doc);
 				doc.clear();
@@ -318,7 +359,7 @@ public class Briss extends JFrame implements ActionListener,
 				for (int i = 1; i <= pageCount; i++) {
 					pdf = (PDF) Behavior.getInstance("AdobePDF", "AdobePDF",
 							null, null, null);
-					pdf.setInput(pdfFile);
+					pdf.setInput(origFile);
 					doc = new Document("doc", null, null);
 					pdf.parse(doc);
 					doc.clear();
@@ -379,7 +420,7 @@ public class Briss extends JFrame implements ActionListener,
 				for (Integer pageNumber : cluster.getPagesToMerge()) {
 					pdf = (PDF) Behavior.getInstance("AdobePDF", "AdobePDF",
 							null, null, null);
-					pdf.setInput(pdfFile);
+					pdf.setInput(origFile);
 					doc = new Document("doc", null, null);
 					pdf.parse(doc);
 					doc.clear();
